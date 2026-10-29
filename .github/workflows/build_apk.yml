@@ -24,18 +24,40 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Wygeneruj brakujący szkielet projektu Android
+      - name: Przygotuj projekt i zbuduj plik APK
         run: |
+          # 1. Zabezpieczamy nasze pliki przed nadpisaniem
+          cp pubspec.yaml pubspec.yaml.bak
+          cp lib/main.dart main.dart.bak
+
+          # 2. Tworzymy czysty szkielet projektu Androida
           flutter create --platforms=android --org com.example.skaner .
 
-      - name: Skonfiguruj uprawnienia kamery i wersję SDK
-        run: |
-          sed -i 's/<application/<uses-permission android:name="android.permission.CAMERA" \/><uses-feature android:name="android.hardware.camera" android:required="true" \/><application/' android/app/src/main/AndroidManifest.xml
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle || true
+          # 3. Przywracamy nasz kod skanera i listę bibliotek
+          mv pubspec.yaml.bak pubspec.yaml
+          mv main.dart.bak lib/main.dart
 
-      - name: Pobierz biblioteki i zbuduj plik APK
-        run: |
+          # 4. Dodajemy uprawnienia kamery do AndroidManifest.xml
+          python3 -c '
+          p = "android/app/src/main/AndroidManifest.xml"
+          c = open(p).read()
+          perm = "<uses-permission android:name=\"android.permission.CAMERA\" />\n    <uses-feature android:name=\"android.hardware.camera\" android:required=\"false\" />\n    "
+          if "android.permission.CAMERA" not in c:
+              c = c.replace("<application", perm + "<application")
+              open(p, "w").write(c)
+          '
+
+          # 5. Ustawiamy wersje SDK (minSdk 21 oraz compileSdk 35) dla obu formatów Gradle
+          python3 -c '
+          import glob, re
+          for p in glob.glob("android/app/build.gradle*"):
+              c = open(p).read()
+              c = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdk = 21" if p.endswith(".kts") else "minSdkVersion 21", c)
+              c = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdk = 35" if p.endswith(".kts") else "compileSdkVersion 35", c)
+              open(p, "w").write(c)
+          '
+
+          # 6. Pobieramy biblioteki i kompilujemy gotowy instalator APK
           flutter pub get
           flutter build apk --release
 
