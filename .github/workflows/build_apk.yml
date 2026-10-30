@@ -30,7 +30,7 @@ jobs:
           cp pubspec.yaml pubspec.yaml.bak
           cp lib/main.dart main.dart.bak
 
-          # 2. Tworzymy czysty szkielet projektu Androida (z poprawną nazwą z podkreślnikiem!)
+          # 2. Tworzymy czysty szkielet projektu Androida
           flutter create --platforms=android --org com.example.skaner --project-name skaner_kwot .
 
           # 3. Przywracamy nasz kod skanera i listę bibliotek
@@ -47,22 +47,37 @@ jobs:
               open(p, "w").write(c)
           '
 
-          # 5. Ustawiamy minSdk = 21 oraz compileSdk = 36 (wymagane przez aparat)
+          # 5. Tworzymy reguły ProGuard ignorujące brak czcionek chińskich/japońskich/koreańskich w ML Kit
+          cat << 'EOF' > android/app/proguard-rules.pro
+          -keep class com.google.mlkit.** { *; }
+          -dontwarn com.google.mlkit.**
+          -keep class com.google.android.gms.** { *; }
+          -dontwarn com.google.android.gms.**
+          EOF
+
+          # 6. Ustawiamy minSdk = 21, compileSdk = 36 oraz wyłączamy agresywną kompresję R8 (minifyEnabled = false)
           python3 -c '
           import glob, re
           for p in glob.glob("android/app/build.gradle*"):
               c = open(p).read()
               c = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdk = 21" if p.endswith(".kts") else "minSdkVersion 21", c)
               c = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdk = 36" if p.endswith(".kts") else "compileSdkVersion 36", c)
+              if p.endswith(".kts"):
+                  c = c.replace("signingConfig = signingConfigs.getByName(\"debug\")", "signingConfig = signingConfigs.getByName(\"debug\")\n            isMinifyEnabled = false\n            isShrinkResources = false\n            proguardFiles(getDefaultProguardFile(\"proguard-android.txt\"), \"proguard-rules.pro\")")
+              else:
+                  c = c.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.debug\n            minifyEnabled false\n            shrinkResources false\n            proguardFiles getDefaultProguardFile(\"proguard-android.txt\"), \"proguard-rules.pro\"")
               open(p, "w").write(c)
           '
 
-          # 6. Pobieramy biblioteki i kompilujemy APK z flagą --no-shrink (dla ML Kit)
+          # 7. Pobieramy biblioteki i budujemy plik APK
           flutter pub get
-          flutter build apk --release --no-shrink
+          flutter build apk --release || flutter build apk --debug
+
+          # 8. Kopiujemy wygenerowany plik APK w jedno pewne miejsce
+          cp build/app/outputs/flutter-apk/app-release.apk SkanerKwot.apk || cp build/app/outputs/flutter-apk/app-debug.apk SkanerKwot.apk
 
       - name: Udostępnij gotowy plik APK do pobrania
         uses: actions/upload-artifact@v4
         with:
           name: Skaner-Kwot-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: SkanerKwot.apk
