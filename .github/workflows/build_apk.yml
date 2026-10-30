@@ -22,21 +22,20 @@ jobs:
       - name: Zainstaluj Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.4'
           channel: 'stable'
 
       - name: Przygotuj projekt i zbuduj plik APK
         run: |
-          # 1. Zabezpieczamy nasz kod skanera
+          # 1. Zabezpieczamy nasze pliki przed nadpisaniem
+          cp pubspec.yaml pubspec.yaml.bak
           cp lib/main.dart main.dart.bak
 
-          # 2. Tworzymy czysty szkielet projektu Androida
-          rm -rf pubspec.yaml pubspec.lock android
-          flutter create --platforms=android --org com.example.skaner .
+          # 2. Tworzymy czysty szkielet projektu Androida (z poprawną nazwą z podkreślnikiem!)
+          flutter create --platforms=android --org com.example.skaner --project-name skaner_kwot .
 
-          # 3. Przywracamy nasz kod skanera i dodajemy biblioteki
+          # 3. Przywracamy nasz kod skanera i listę bibliotek
+          mv pubspec.yaml.bak pubspec.yaml
           mv main.dart.bak lib/main.dart
-          flutter pub add camera:^0.11.0+2 google_mlkit_text_recognition:^0.13.0 permission_handler:^11.3.1
 
           # 4. Dodajemy uprawnienia kamery do AndroidManifest.xml
           python3 -c '
@@ -58,7 +57,8 @@ jobs:
               open(p, "w").write(c)
           '
 
-          # 6. Kompilujemy APK z flagą --no-shrink (wymaganą przez Google ML Kit)
+          # 6. Pobieramy biblioteki i kompilujemy APK z flagą --no-shrink (dla ML Kit)
+          flutter pub get
           flutter build apk --release --no-shrink
 
       - name: Udostępnij gotowy plik APK do pobrania
