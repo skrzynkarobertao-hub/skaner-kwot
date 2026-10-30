@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#00695c">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Skaner Kwot PLN</title>
+  <!-- Silnik rozpoznawania tekstu OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #000; color: #fff; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+    
+    /* Górny pasek */
+    header { background: #00695c; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; z-index: 20; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+    header h1 { font-size: 18px; font-weight: 700; }
+    .header-actions { display: flex; gap: 8px; }
+    .icon-btn { background: rgba(255,255,255,0.18); border: none; color: white; padding: 7px 11px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .icon-btn:active { background: rgba(255,255,255,0.35); }
+
+    /* Główny obszar kamery i zdjęcia */
+    #viewport { position: relative; flex: 1; width: 100%; overflow: hidden; background: #111; display: flex; align-items: center; justify-content: center; }
+    video, canvas { position: absolute; width: 100%; height: 100%; object-fit: contain; }
+    #overlay { position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+
+    /* Znaczniki kwot na ekranie */
+    .marker { position: absolute; border: 2.5px solid #00e676; background: rgba(0, 230, 118, 0.32); border-radius: 6px; pointer-events: auto; cursor: pointer; transition: transform 0.1s; }
+    .marker.unselected { border-color: #ff5252; background: rgba(255, 82, 82, 0.25); }
+    .marker.edited { border-color: #40c4ff; background: rgba(64, 196, 255, 0.35); }
+    
+    .badge { position: absolute; right: -9px; top: -9px; width: 20px; height: 20px; border-radius: 50%; background: #00c853; color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+    .marker.unselected .badge { background: #d50000; }
+    .marker.edited .badge { background: #0091ea; }
+    
+    .value-tag { position: absolute; left: 0; top: -22px; background: rgba(0, 0, 0, 0.85); color: #69f0ae; font-size: 11px; font-weight: bold; padding: 2px 5px; border-radius: 4px; white-space: nowrap; border: 1px solid #00e676; }
+    .marker.unselected .value-tag { color: #ff8a80; border-color: #ff5252; text-decoration: line-through; }
+    .marker.edited .value-tag { color: #80d8ff; border-color: #40c4ff; }
+
+    /* Ekran ładowania podczas analizy */
+    #loader { position: absolute; inset: 0; background: rgba(0,0,0,0.78); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 30; text-align: center; padding: 20px; }
+    .spinner { width: 48px; height: 48px; border: 5px solid #333; border-top-color: #00e676; border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Dolny panel podsumowania */
+    footer { background: #1a1a1a; padding: 14px 16px 20px; border-radius: 20px 20px 0 0; z-index: 20; box-shadow: 0 -4px 12px rgba(0,0,0,0.6); }
+    .info-row { display: flex; justify-content: space-between; font-size: 12px; color: #bbb; margin-bottom: 8px; }
+    .hint { color: #ffd740; }
+    .sum-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+    .sum-label { font-size: 18px; font-weight: bold; }
+    .sum-value { font-size: 28px; font-weight: 800; color: #00e676; }
+    
+    #mainBtn { width: 100%; height: 54px; border: none; border-radius: 12px; background: #00897b; color: white; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    #mainBtn.rescan { background: #ef6c00; }
+    #mainBtn:active { opacity: 0.9; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Skaner Kwot PLN</h1>
+    <div class="header-actions" id="topActions" style="display: none;">
+      <button class="icon-btn" onclick="addManualNumber()">+ Dopisz kwotę</button>
+      <button class="icon-btn" onclick="toggleAll()">Zaznacz/Odznacz</button>
+    </div>
+  </header>
+
+  <div id="viewport">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas" style="display: none;"></canvas>
+    <div id="overlay"></div>
+    <div id="loader">
+      <div class="spinner"></div>
+      <div id="loaderText">Analizowanie kartki i łączenie kwot...</div>
+    </div>
+  </div>
+
+  <footer>
+    <div id="summaryPanel" style="display: none;">
+      <div class="info-row">
+        <span id="countText">Zaznaczono: 0 z 0</span>
+        <span class="hint">Dotknij: wł/wył • Przytrzymaj: edytuj</span>
+      </div>
+      <div class="sum-row">
+        <span class="sum-label">SUMA:</span>
+        <span class="sum-value" id="totalSum">0,00 PLN</span>
+      </div>
+    </div>
+    <button id="mainBtn" onclick="handleMainAction()">📷 ZESKANUJ KARTKĘ Z KWOTAMI</button>
+  </footer>
+
+<script>
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const overlay = document.getElementById('overlay');
+  const loader = document.getElementById('loader');
+  const mainBtn = document.getElementById('mainBtn');
+  const summaryPanel = document.getElementById('summaryPanel');
+  const topActions = document.getElementById('topActions');
+
+  let isScanned = false;
+  let detectedNumbers = [];
+
+  // Uruchomienie tylnej kamery telefonu
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      });
+      video.srcObject = stream;
+    } catch (err) {
+      alert('Brak dostępu do kamery. Upewnij się, że otwierasz stronę przez HTTPS lub localhost i zezwoliłeś na użycie aparatu.');
+    }
+  }
+  startCamera();
+
+  async function handleMainAction() {
+    if (!isScanned) {
+      await scanFrame();
+    } else {
+      resetScanner();
+    }
+  }
+
+  // Zatrzymanie klatki i rozpoznawanie liczb
+  async function scanFrame() {
+    if (!video.videoWidth) return;
+    loader.style.display = 'flex';
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    video.style.display = 'none';
+    canvas.style.display = 'block';
+
+    try {
+      const result = await Tesseract.recognize(canvas, 'pol+eng');
+      extractNumbersFromOCR(result.data);
+      isScanned = true;
+      mainBtn.textContent = '🔄 SKANUJ KOLEJNĄ KARTKĘ';
+      mainBtn.classList.add('rescan');
+      summaryPanel.style.display = 'block';
+      topActions.style.display = 'flex';
+      renderMarkers();
+      updateSum();
+    } catch (e) {
+      alert('Błąd podczas odczytu tekstu: ' + e.message);
+      resetScanner();
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  // Wyciąganie kwot ze spacjami (np. 9 123,23 PLN) i przeliczanie na grosze
+  function extractNumbersFromOCR(data) {
+    detectedNumbers = [];
+    // Wyrażenie wyłapujące liczby ze spacjami i groszami po przecinku lub kropce
+    const regex = /(?<!\d)(\d{1,3}(?:[ \t]\d{3})+|\d+)(?:[.,](\d{1,2}))?(?!\d)/g;
+
+    (data.lines || []).forEach(line => {
+      const text = line.text;
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        const raw = match[0].trim();
+        // Ignoruj pojedyncze cyfry bez przecinka (np. "1.")
+        if (!raw.includes(',') && !raw.includes('.') && raw.length < 2) continue;
+
+        const grosze = parseToGrosze(raw);
+        if (grosze !== null && grosze > 0) {
+          const b = line.bbox;
+          const lineLen = Math.max(text.length, 1);
+          const charW = (b.x1 - b.x0) / lineLen;
+          const x0 = b.x0 + match.index * charW;
+          const x1 = b.x0 + (match.index + raw.length) * charW;
+
+          detectedNumbers.push({
+            rawText: raw,
+            grosze: grosze,
+            bbox: { x0, y0: b.y0, x1, y1: b.y1 },
+            selected: true,
+            edited: false
+          });
+        }
+      }
+    });
+  }
+
+  // Konwersja tekstu na grosze (100% dokładności bez błędów zaokrągleń)
+  function parseToGrosze(str) {
+    let cleaned = str.replace(/[ \t]/g, '').replace(',', '.');
+    let parts = cleaned.split('.');
+    if (parts.length > 2) return null;
+    let zlote = parseInt(parts[0], 10);
+    if (isNaN(zlote)) return null;
+    let gr = 0;
+    if (parts.length === 2) {
+      let grStr = parts[1].padEnd(2, '0').substring(0, 2);
+      gr = parseInt(grStr, 10) || 0;
+    }
+    return (zlote * 100) + gr;
+  }
+
+  function formatPLN(grosze) {
+    const zl = Math.floor(grosze / 100);
+    const gr = Math.abs(grosze % 100);
+    const zlStr = zl.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return `${zlStr},${gr.toString().padStart(2, '0')}`;
+  }
+
+  // Rysowanie klikalnych znaczników na ekranie
+  function renderMarkers() {
+    overlay.innerHTML = '';
+    const vRect = viewport.getBoundingClientRect();
+    const imgRatio = canvas.width / canvas.height;
+    const viewRatio = vRect.width / vRect.height;
+
+    let renderW, renderH, offsetX, offsetY;
+    if (imgRatio > viewRatio) {
+      renderW = vRect.width;
+      renderH = vRect.width / imgRatio;
+      offsetX = 0;
+      offsetY = (vRect.height - renderH) / 2;
+    } else {
+      renderH = vRect.height;
+      renderW = vRect.height * imgRatio;
+      offsetX = (vRect.width - renderW) / 2;
+      offsetY = 0;
+    }
+
+    const scaleX = renderW / canvas.width;
+    const scaleY = renderH / canvas.height;
+
+    detectedNumbers.forEach((item) => {
+      if (!item.bbox) return;
+      const el = document.createElement('div');
+      el.className = 'marker' + (!item.selected ? ' unselected' : '') + (item.edited ? ' edited' : '');
+
+      const left = offsetX + item.bbox.x0 * scaleX - 4;
+      const top = offsetY + item.bbox.y0 * scaleY - 4;
+      const width = (item.bbox.x1 - item.bbox.x0) * scaleX + 8;
+      const height = (item.bbox.y1 - item.bbox.y0) * scaleY + 8;
+
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+      el.style.width = `${width}px`;
+      el.style.height = `${height}px`;
+
+      // Etykieta z kwotą nad ramką
+      const tag = document.createElement('div');
+      tag.className = 'value-tag';
+      tag.textContent = formatPLN(item.grosze) + ' zł';
+      el.appendChild(tag);
+
+      // Kółeczko statusu w rogu
+      const badge = document.createElement('div');
+      badge.className = 'badge';
+      badge.textContent = item.selected ? (item.edited ? '✎' : '✓') : '✕';
+      el.appendChild(badge);
+
+      // Obsługa krótkiego dotknięcia (wł/wył) oraz długiego przytrzymania (edycja)
+      let pressTimer;
+      let longPressed = false;
+
+      el.addEventListener('pointerdown', () => {
+        longPressed = false;
+        pressTimer = setTimeout(() => {
+          longPressed = true;
+          editNumber(item);
+        }, 550);
+      });
+
+      el.addEventListener('pointerup', () => {
+        clearTimeout(pressTimer);
+        if (!longPressed) {
+          item.selected = !item.selected;
+          renderMarkers();
+          updateSum();
+        }
+      });
+
+      el.addEventListener('pointerleave', () => clearTimeout(pressTimer));
+      overlay.appendChild(el);
+    });
+  }
+
+  function editNumber(item) {
+    const currentVal = formatPLN(item.grosze).replace(' ', '');
+    const input = prompt(`Korekta kwoty (odczytano: "${item.rawText}"):\nWpisz poprawną wartość w PLN:`, currentVal);
+    if (input !== null) {
+      const newGrosze = parseToGrosze(input);
+      if (newGrosze !== null && newGrosze >= 0) {
+        item.grosze = newGrosze;
+        item.edited = true;
+        item.selected = true;
+        renderMarkers();
+        updateSum();
+      } else {
+        alert('Nieprawidłowy format liczby (np. 9123,23)');
+      }
+    }
+  }
+
+  function addManualNumber() {
+    const input = prompt('Dopisz brakującą kwotę w PLN (np. 450,00):');
+    if (input !== null) {
+      const newGrosze = parseToGrosze(input);
+      if (newGrosze !== null && newGrosze > 0) {
+        detectedNumbers.push({
+          rawText: 'Ręcznie',
+          grosze: newGrosze,
+          bbox: null,
+          selected: true,
+          edited: true
+        });
+        updateSum();
+      }
+    }
+  }
+
+  function toggleAll() {
+    const anyUnselected = detectedNumbers.some(n => !n.selected);
+    detectedNumbers.forEach(n => n.selected = anyUnselected);
+    renderMarkers();
+    updateSum();
+  }
+
+  function updateSum() {
+    const selected = detectedNumbers.filter(n => n.selected);
+    const totalGrosze = selected.reduce((acc, n) => acc + n.grosze, 0);
+    document.getElementById('countText').textContent = `Zaznaczono: ${selected.length} z ${detectedNumbers.length}`;
+    document.getElementById('totalSum').textContent = `${formatPLN(totalGrosze)} PLN`;
+  }
+
+  function resetScanner() {
+    isScanned = false;
+    detectedNumbers = [];
+    overlay.innerHTML = '';
+    canvas.style.display = 'none';
+    video.style.display = 'block';
+    summaryPanel.style.display = 'none';
+    topActions.style.display = 'none';
+    mainBtn.textContent = '📷 ZESKANUJ KARTKĘ Z KWOTAMI';
+    mainBtn.classList.remove('rescan');
+  }
+
+  window.addEventListener('resize', () => { if (isScanned) renderMarkers(); });
+</script>
+</body>
+</html>
