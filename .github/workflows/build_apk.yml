@@ -47,13 +47,13 @@ jobs:
               open(p, "w").write(c)
           '
 
-          # 5. Ustawiamy wersje SDK (minSdk 21 oraz compileSdk 35) dla obu formatów Gradle
+          # 5. Ustawiamy wersje SDK (minSdk 21 oraz compileSdk 36) dla obu formatów Gradle
           python3 -c '
           import glob, re
           for p in glob.glob("android/app/build.gradle*"):
               c = open(p).read()
               c = re.sub(r"minSdk\s*=?\s*flutter\.minSdkVersion", "minSdk = 21" if p.endswith(".kts") else "minSdkVersion 21", c)
-              c = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdk = 35" if p.endswith(".kts") else "compileSdkVersion 35", c)
+              c = re.sub(r"compileSdk\s*=?\s*flutter\.compileSdkVersion", "compileSdk = 36" if p.endswith(".kts") else "compileSdkVersion 36", c)
               open(p, "w").write(c)
           '
 
